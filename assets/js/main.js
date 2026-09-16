@@ -4,9 +4,7 @@ const root = document.documentElement;
 const film = document.querySelector("#scroll-film");
 const menuButton = document.querySelector(".menu-toggle");
 const siteNav = document.querySelector("#site-nav");
-const sectionNodes = [...document.querySelectorAll("[data-section]")];
 const sceneNodes = [...document.querySelectorAll(".track-section, .scene")];
-const railLinks = [...document.querySelectorAll("[data-rail]")];
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, value));
@@ -18,6 +16,11 @@ let targetFilmTime = 0;
 let smoothFilmTime = 0;
 let lastFilmWrite = 0;
 let frameRequested = false;
+
+// The playhead is intentionally unbounded. Only the value written to the video
+// is wrapped, so changing scroll direction always reverses through the same film.
+const FILM_PIXELS_PER_SECOND = 280;
+const FILM_WRITE_INTERVAL = 24;
 
 function createLenis() {
   if (reduceMotion.matches || lenis) return;
@@ -56,25 +59,15 @@ function setSceneProgress() {
   for (const node of sceneNodes) node.style.setProperty("--p", sceneProgress(node).toFixed(4));
 }
 
-function setActiveChapter() {
-  const marker = window.innerHeight * 0.46;
-  let active = sectionNodes[0]?.dataset.section ?? "top";
-  for (const section of sectionNodes) {
-    const rect = section.getBoundingClientRect();
-    if (rect.top <= marker && rect.bottom > marker) {
-      active = section.dataset.section;
-      break;
-    }
-  }
-  for (const link of railLinks) link.classList.toggle("is-active", link.dataset.rail === active);
-}
-
 function writeFilmTime(now) {
   if (!film || reduceMotion.matches || film.readyState < 1) return;
-  smoothFilmTime = lerp(smoothFilmTime, targetFilmTime, 0.105);
-  if (Math.abs(smoothFilmTime - targetFilmTime) < 0.012) smoothFilmTime = targetFilmTime;
-  if (now - lastFilmWrite > 34 && Math.abs(film.currentTime - smoothFilmTime) > 0.025) {
-    film.currentTime = clamp(smoothFilmTime, 0, Math.max(0, filmDuration - 0.045));
+  smoothFilmTime = lerp(smoothFilmTime, targetFilmTime, 0.22);
+  if (Math.abs(smoothFilmTime - targetFilmTime) < 0.008) smoothFilmTime = targetFilmTime;
+
+  const cycle = Math.max(0.1, filmDuration - 0.08);
+  const wrappedFilmTime = ((smoothFilmTime % cycle) + cycle) % cycle;
+  if (now - lastFilmWrite >= FILM_WRITE_INTERVAL && Math.abs(film.currentTime - wrappedFilmTime) > 0.016) {
+    film.currentTime = wrappedFilmTime;
     lastFilmWrite = now;
   }
 }
@@ -83,11 +76,10 @@ function update(now = performance.now()) {
   frameRequested = false;
   const progress = documentProgress();
   root.style.setProperty("--scroll-progress", progress.toFixed(5));
-  targetFilmTime = progress * Math.max(0, filmDuration - 0.045);
+  targetFilmTime = Math.max(0, window.scrollY) / FILM_PIXELS_PER_SECOND;
   setSceneProgress();
-  setActiveChapter();
   writeFilmTime(now);
-  if (!reduceMotion.matches && Math.abs(smoothFilmTime - targetFilmTime) > 0.014) requestFrame();
+  if (!reduceMotion.matches && Math.abs(smoothFilmTime - targetFilmTime) > 0.009) requestFrame();
 }
 
 function requestFrame() {
@@ -103,9 +95,12 @@ function prepareFilm() {
   const ready = () => {
     if (Number.isFinite(film.duration) && film.duration > 0) filmDuration = film.duration;
     film.pause();
-    smoothFilmTime = documentProgress() * Math.max(0, filmDuration - 0.045);
+    smoothFilmTime = Math.max(0, window.scrollY) / FILM_PIXELS_PER_SECOND;
     targetFilmTime = smoothFilmTime;
-    if (!reduceMotion.matches) film.currentTime = smoothFilmTime;
+    if (!reduceMotion.matches) {
+      const cycle = Math.max(0.1, filmDuration - 0.08);
+      film.currentTime = smoothFilmTime % cycle;
+    }
     requestFrame();
   };
   if (film.readyState >= 1) ready();
